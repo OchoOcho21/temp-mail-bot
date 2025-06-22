@@ -1,93 +1,101 @@
-import asyncio, aiohttp
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import telebot
+import requests
+import threading
+import time
 from datetime import datetime
 
 BOT_TOKEN = '7942960582:AAETZ5KvUiw9_SBoqocKGxqGt8SYbo00D70'
 API_BASE = 'https://email-six-pearl.vercel.app'
+
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="Markdown")
 sessions = {}
 last_msgs = {}
 
-async def api_post(path, payload=None):
-    async with aiohttp.ClientSession() as s:
-        async with s.post(f"{API_BASE}{path}", json=payload or {}) as r:
-            return await r.json()
+def api_post(path, payload=None):
+    r = requests.post(f"{API_BASE}{path}", json=payload or {})
+    return r.json()
 
-async def api_get(path):
-    async with aiohttp.ClientSession() as s:
-        async with s.get(f"{API_BASE}{path}") as r:
-            return await r.json()
+def api_get(path):
+    r = requests.get(f"{API_BASE}{path}")
+    return r.json()
 
-async def api_delete(path):
-    async with aiohttp.ClientSession() as s:
-        async with s.delete(f"{API_BASE}{path}") as r:
-            return await r.text()
+def api_delete(path):
+    r = requests.delete(f"{API_BASE}{path}")
+    return r.text
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await help_command(update, context)
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
+@bot.message_handler(commands=['start', 'help'])
+def send_help(message):
+    help_text = (
         "📌 *Temp Mail Bot Commands*\n\n"
         "/getmail `[provider]` – Create a temp email (optional: mail.tm, dropmail.me, etc)\n"
-        "/messages – Check current inbox messages\n"
+        "/messages – Check your current inbox\n"
         "/deletesession – Delete the active session\n"
         "/providers – List supported email providers\n"
         "/help – Show this help message"
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    bot.reply_to(message, help_text)
 
-async def providers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = await api_get("/providers")
-    if not data:
-        await update.message.reply_text("⚠️ Could not fetch providers.")
-        return
-    provider_list = "\n".join(f"• `{p}`" for p in data)
-    await update.message.reply_text(f"📮 *Available Providers:*\n{provider_list}", parse_mode="Markdown")
+@bot.message_handler(commands=['providers'])
+def list_providers(message):
+    try:
+        data = api_get("/providers")
+        if not data:
+            bot.reply_to(message, "⚠️ Could not fetch providers.")
+            return
+        providers = "\n".join(f"• `{p}`" for p in data)
+        bot.reply_to(message, f"📮 *Available Providers:*\n{providers}")
+    except:
+        bot.reply_to(message, "❌ Error getting providers.")
 
-async def getmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    args = context.args
-    provider = args[0] if args else None
+@bot.message_handler(commands=['getmail'])
+def get_mail(message):
+    user_id = message.from_user.id
+    parts = message.text.split()
+    provider = parts[1] if len(parts) > 1 else None
     payload = {"provider": provider} if provider else {}
-    session = await api_post("/gen", payload)
-    sessions[user_id] = session
-    last_msgs[user_id] = set()
-    email = session["email_address"]
-    prov = session["provider"]
-    await update.message.reply_text(f"📧 `{email}`\n🔗 `{prov}`", parse_mode="Markdown")
+    try:
+        session = api_post("/gen", payload)
+        sessions[user_id] = session
+        last_msgs[user_id] = set()
+        email = session["email_address"]
+        prov = session["provider"]
+        bot.reply_to(message, f"📧 `{email}`\n🔗 `{prov}`")
+    except:
+        bot.reply_to(message, "❌ Error generating temp mail.")
 
-async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+@bot.message_handler(commands=['messages'])
+def check_messages(message):
+    user_id = message.from_user.id
     if user_id not in sessions:
-        await update.message.reply_text("No active session. Use /getmail first.")
+        bot.reply_to(message, "❌ No active session. Use /getmail first.")
         return
     sid = sessions[user_id]["api_session_id"]
-    inbox = await api_get(f"/sessions/{sid}/messages")
+    inbox = api_get(f"/sessions/{sid}/messages")
     if not inbox:
-        await update.message.reply_text("📭 No messages.")
+        bot.reply_to(message, "📭 No messages.")
         return
     for msg in inbox:
         f = msg.get("from", "Unknown")
         s = msg.get("subject", "(No Subject)")
-        await update.message.reply_text(f"📨 `{f}`\n📝 `{s}`", parse_mode="Markdown")
+        bot.send_message(user_id, f"📨 `{f}`\n📝 `{s}`")
 
-async def deletesession(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+@bot.message_handler(commands=['deletesession'])
+def delete_session(message):
+    user_id = message.from_user.id
     if user_id not in sessions:
-        await update.message.reply_text("No session to delete.")
+        bot.reply_to(message, "❌ No session to delete.")
         return
     sid = sessions[user_id]["api_session_id"]
-    await api_delete(f"/sessions/{sid}")
+    api_delete(f"/sessions/{sid}")
     del sessions[user_id]
     del last_msgs[user_id]
-    await update.message.reply_text("🗑️ Session deleted.")
+    bot.reply_to(message, "🗑️ Session deleted.")
 
-async def auto_refresh(app):
+def auto_refresh():
     while True:
         for user_id, session in sessions.items():
             sid = session["api_session_id"]
-            inbox = await api_get(f"/sessions/{sid}/messages")
+            inbox = api_get(f"/sessions/{sid}/messages")
             seen = last_msgs.get(user_id, set())
             for msg in inbox:
                 msg_id = msg.get("id")
@@ -95,22 +103,15 @@ async def auto_refresh(app):
                     f = msg.get("from", "Unknown")
                     s = msg.get("subject", "(No Subject)")
                     date = msg.get("date", datetime.utcnow().isoformat())
-                    await app.bot.send_message(chat_id=user_id, text=f"📬 New Mail:\n📨 `{f}`\n📝 `{s}`\n🕒 `{date}`", parse_mode="Markdown")
+                    bot.send_message(user_id, f"📬 New Mail:\n📨 `{f}`\n📝 `{s}`\n🕒 `{date}`")
                     seen.add(msg_id)
             last_msgs[user_id] = seen
-        await asyncio.sleep(30)
+        time.sleep(30)
 
-async def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("getmail", getmail))
-    app.add_handler(CommandHandler("messages", messages))
-    app.add_handler(CommandHandler("deletesession", deletesession))
-    app.add_handler(CommandHandler("providers", providers))
-    asyncio.create_task(auto_refresh(app))
-    print("✅ Temp Mail Bot started with inbox auto-refresh.")
-    await app.run_polling()
+def start_polling():
+    print("✅ Temp Mail Bot running via telebot polling...")
+    threading.Thread(target=auto_refresh, daemon=True).start()
+    bot.infinity_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    start_polling()
