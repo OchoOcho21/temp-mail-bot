@@ -75,9 +75,11 @@ def check_messages(message):
         bot.reply_to(message, "📭 No messages.")
         return
     for msg in inbox:
-        f = msg.get("from", "Unknown")
-        s = msg.get("subject", "(No Subject)")
-        bot.send_message(user_id, f"📨 `{f}`\n📝 `{s}`")
+    if not isinstance(msg, dict):
+        continue
+    f = msg.get("from", "Unknown")
+    s = msg.get("subject", "(No Subject)")
+    bot.send_message(user_id, f"📨 `{f}`\n📝 `{s}`")
 
 @bot.message_handler(commands=['deletesession'])
 def delete_session(message):
@@ -98,6 +100,8 @@ def auto_refresh():
             inbox = api_get(f"/sessions/{sid}/messages")
             seen = last_msgs.get(user_id, set())
             for msg in inbox:
+                if not isinstance(msg, dict):
+                    continue
                 msg_id = msg.get("id")
                 if msg_id not in seen:
                     f = msg.get("from", "Unknown")
