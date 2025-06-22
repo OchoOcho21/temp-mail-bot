@@ -69,17 +69,24 @@ def check_messages(message):
     if user_id not in sessions:
         bot.reply_to(message, "❌ No active session. Use /getmail first.")
         return
-    sid = sessions[user_id]["api_session_id"]
-    inbox = api_get(f"/sessions/{sid}/messages")
-    if not inbox:
-        bot.reply_to(message, "📭 No messages.")
-        return
-    for msg in inbox:
-    if not isinstance(msg, dict):
-        continue
-    f = msg.get("from", "Unknown")
-    s = msg.get("subject", "(No Subject)")
-    bot.send_message(user_id, f"📨 `{f}`\n📝 `{s}`")
+    try:
+        sid = sessions[user_id]["api_session_id"]
+        inbox = api_get(f"/sessions/{sid}/messages")
+        if not inbox or not isinstance(inbox, list):
+            bot.reply_to(message, "📭 No messages.")
+            return
+        found = False
+        for msg in inbox:
+            if not isinstance(msg, dict):
+                continue
+            f = msg.get("from", "Unknown")
+            s = msg.get("subject", "(No Subject)")
+            bot.send_message(user_id, f"📨 `{f}`\n📝 `{s}`")
+            found = True
+        if not found:
+            bot.send_message(user_id, "📭 Inbox is empty.")
+    except Exception as e:
+        bot.send_message(user_id, f"❌ Error reading messages:\n{e}")
 
 @bot.message_handler(commands=['deletesession'])
 def delete_session(message):
